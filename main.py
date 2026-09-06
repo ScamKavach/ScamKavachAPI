@@ -1,7 +1,6 @@
 import os
 import json
 import base64
-import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -10,7 +9,6 @@ from google.genai import types
 
 app = FastAPI()
 
-# Cross-Origin Bridge
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -19,10 +17,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Securely initialize the new GenAI client
-api_key = os.environ.get("GEMINI_API_KEY")
-if api_key:
-    client = genai.Client(api_key=api_key)
+# Fetch the comma-separated keys and create a list
+keys_env = os.environ.get("GEMINI_API_KEY", "")
+API_KEYS = [k.strip() for k in keys_env.split(",") if k.strip()]
 
 class ScanRequest(BaseModel):
     mode: str
@@ -30,8 +27,8 @@ class ScanRequest(BaseModel):
 
 @app.post("/scan")
 async def scan_threat(request: ScanRequest):
-    if not api_key:
-        return {"error": "API Key not configured on server."}
+    if not API_KEYS:
+        return {"error": "No API Keys configured on server."}
 
     prompt = """
     You are 'ScamKavach', a highly advanced cybersecurity threat intelligence AI. 
@@ -47,20 +44,22 @@ async def scan_threat(request: ScanRequest):
     }
     """
     
-    max_retries = 3
-    for attempt in range(max_retries):
+    last_error = ""
+    
+    # Loop through the available API keys
+    for key in API_KEYS:
         try:
+            # Initialize client with the current key in the loop
+            client = genai.Client(api_key=key)
+            
             if request.mode == 'text':
-                # Text Analysis Pipeline
                 response = client.models.generate_content(
                     model='gemini-3.6-flash',
                     contents=[prompt, request.payload]
                 )
             else:
-                # Multimodal Vision Pipeline (OCR & Image parsing)
                 header, encoded = request.payload.split(",", 1)
                 mime_type = header.split(":")[1].split(";")[0]
-                
                 image_bytes = base64.b64decode(encoded)
                 image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
                 
@@ -69,15 +68,20 @@ async def scan_threat(request: ScanRequest):
                     contents=[prompt, image_part]
                 )
             
-            # Clean the response to guarantee flawless UI rendering
             raw_text = response.text.replace('```json', '').replace('```', '').strip()
             return json.loads(raw_text)
             
         except Exception as e:
             error_msg = str(e)
-            # If it's a 503 overload and we haven't hit our retry limit, wait and try again
-            if "503" in error_msg and attempt < max_retries - 1:
-                await asyncio.sleep(2)
+            last_error = error_msg
+            
+            # If it's a rate limit (429) or temporary overload (503), try the next key
+            if "429" in error_msg or "503" in error_msg:
+                print(f"Key failed with {error_msg[:20]}... Switching to next key.")
                 continue
-            # If it's a different error or we ran out of retries, return the error
-            return {"error": error_msg}
+            else:
+                # If it's a different error (like bad formatting), break and return it
+                return {"error": error_msg}
+
+    # If all keys are exhausted and return 429s
+    return {"error": f"All API keys exhausted. Last error: {last_error}"}

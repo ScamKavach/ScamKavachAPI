@@ -50,7 +50,7 @@ async def scan_threat(request: ScanRequest):
         if request.mode == 'text':
             # Text Analysis Pipeline
             response = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3.6-flash',
                 contents=[prompt, request.payload]
             )
         else:
@@ -62,7 +62,7 @@ async def scan_threat(request: ScanRequest):
             image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
             
             response = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3.6-flash',
                 contents=[prompt, image_part]
             )
         

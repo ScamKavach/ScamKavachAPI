@@ -1,6 +1,7 @@
 import os
 import json
 import base64
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -46,29 +47,37 @@ async def scan_threat(request: ScanRequest):
     }
     """
     
-    try:
-        if request.mode == 'text':
-            # Text Analysis Pipeline
-            response = client.models.generate_content(
-                model='gemini-3.6-flash',
-                contents=[prompt, request.payload]
-            )
-        else:
-            # Multimodal Vision Pipeline (OCR & Image parsing)
-            header, encoded = request.payload.split(",", 1)
-            mime_type = header.split(":")[1].split(";")[0]
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            if request.mode == 'text':
+                # Text Analysis Pipeline
+                response = client.models.generate_content(
+                    model='gemini-3.6-flash',
+                    contents=[prompt, request.payload]
+                )
+            else:
+                # Multimodal Vision Pipeline (OCR & Image parsing)
+                header, encoded = request.payload.split(",", 1)
+                mime_type = header.split(":")[1].split(";")[0]
+                
+                image_bytes = base64.b64decode(encoded)
+                image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+                
+                response = client.models.generate_content(
+                    model='gemini-3.6-flash',
+                    contents=[prompt, image_part]
+                )
             
-            image_bytes = base64.b64decode(encoded)
-            image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+            # Clean the response to guarantee flawless UI rendering
+            raw_text = response.text.replace('```json', '').replace('```', '').strip()
+            return json.loads(raw_text)
             
-            response = client.models.generate_content(
-                model='gemini-3.6-flash',
-                contents=[prompt, image_part]
-            )
-        
-        # Clean the response to guarantee flawless UI rendering
-        raw_text = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(raw_text)
-        
-    except Exception as e:
-        return {"error": str(e)}
+        except Exception as e:
+            error_msg = str(e)
+            # If it's a 503 overload and we haven't hit our retry limit, wait and try again
+            if "503" in error_msg and attempt < max_retries - 1:
+                await asyncio.sleep(2)
+                continue
+            # If it's a different error or we ran out of retries, return the error
+            return {"error": error_msg}

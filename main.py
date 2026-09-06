@@ -1,13 +1,15 @@
 import os
 import json
+import base64
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 app = FastAPI()
 
-# This is the bridge. It allows your Cloudflare Pages frontend to talk to this backend.
+# Cross-Origin Bridge
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -16,11 +18,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# We will securely inject the API key later in Render
+# Securely initialize the new GenAI client
 api_key = os.environ.get("GEMINI_API_KEY")
 if api_key:
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-3.1-flash')
+    client = genai.Client(api_key=api_key)
 
 class ScanRequest(BaseModel):
     mode: str
@@ -47,18 +48,25 @@ async def scan_threat(request: ScanRequest):
     
     try:
         if request.mode == 'text':
-            response = model.generate_content([prompt, request.payload])
+            # Text Analysis Pipeline
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[prompt, request.payload]
+            )
         else:
-            # Parse the base64 image coming from the frontend
+            # Multimodal Vision Pipeline (OCR & Image parsing)
             header, encoded = request.payload.split(",", 1)
             mime_type = header.split(":")[1].split(";")[0]
-            image_part = {
-                "mime_type": mime_type,
-                "data": encoded
-            }
-            response = model.generate_content([prompt, image_part])
+            
+            image_bytes = base64.b64decode(encoded)
+            image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+            
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[prompt, image_part]
+            )
         
-        # Strip out any markdown formatting the LLM might try to add
+        # Clean the response to guarantee flawless UI rendering
         raw_text = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(raw_text)
         

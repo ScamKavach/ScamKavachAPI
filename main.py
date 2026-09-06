@@ -25,6 +25,11 @@ class ScanRequest(BaseModel):
     mode: str
     payload: str
 
+# WAKE-UP ENDPOINT: Gives the frontend a lightweight URL to ping on load
+@app.get("/health")
+async def health_check():
+    return {"status": "Scam Kavach Secure Vault is Awake"}
+
 @app.post("/scan")
 async def scan_threat(request: ScanRequest):
     if not API_KEYS:
@@ -49,7 +54,6 @@ async def scan_threat(request: ScanRequest):
     # Loop through the available API keys
     for key in API_KEYS:
         try:
-            # Initialize client with the current key in the loop
             client = genai.Client(api_key=key)
             
             if request.mode == 'text':
@@ -75,13 +79,10 @@ async def scan_threat(request: ScanRequest):
             error_msg = str(e)
             last_error = error_msg
             
-            # If it's a rate limit (429) or temporary overload (503), try the next key
             if "429" in error_msg or "503" in error_msg:
                 print(f"Key failed with {error_msg[:20]}... Switching to next key.")
                 continue
             else:
-                # If it's a different error (like bad formatting), break and return it
                 return {"error": error_msg}
 
-    # If all keys are exhausted and return 429s
     return {"error": f"All API keys exhausted. Last error: {last_error}"}
